@@ -213,6 +213,21 @@ void *connection_handler (void *socket_desc)
 	return 0;
 }
 
+/*****************************************************************************************
+* Function:  write_message
+*
+* Author:  Mack Smith
+*
+* Description:  This function takes a message from the client and puts it in the mailbox
+* denoted with boxnum.  It replaces any message already in the mailbox.  It then sends a 
+* message back to the client when the message is written 
+*
+* Parameters: 
+*	1) int boxnum - the mailbox number used to index to the desired mailbox
+*	2) char *message - a pointer to the message from the client
+*	3) int &socket - the socket associated with the client, used to send messages back
+*
+******************************************************************************************/
 void write_message (int boxnum, char *message, int &socket)
 {	
 	char *wait_message = "Waiting to write message";
@@ -227,6 +242,20 @@ void write_message (int boxnum, char *message, int &socket)
 	semaphores[boxnum] = 0;
 }
 
+/*****************************************************************************************
+* Function:  read_message
+*
+* Author:  Mack Smith
+*
+* Description:  This function takes in a box number to identify the desired mailbox to read
+* from.  It then uses the socket descriptor to write the message from the mailbox back to
+* the client.  
+*
+* Parameters:
+*	1) int boxnum - the mailbox number used to index to the desired mailbox
+*	2) int &socket - the socket associated with the client, used to send messages back
+*
+******************************************************************************************/
 void read_message (int boxnum, int &socket)
 {
 	char *wait_message = "Waiting to read message";
