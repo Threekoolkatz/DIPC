@@ -7,26 +7,35 @@
 #include<pthread.h>
 #include<cstring>
 #include<cstdlib>
+#include<sys/wait.h>
+
 
 using namespace std;
 
 char **mailboxes;
 int *semaphores;
+int packetSize;
+int killFlag = 0;
 
 void *connection_handler (void *socket_desc);
-void write_message (int boxnum, char *message);
+void write_message (int boxnum, char *message, int &socket);
 void read_message (int boxnum, int &socket);
  
 int main(int argc , char *argv[])
 {
-	int numBoxes, boxSize, packetSize;
-	char port[25];
+	int numBoxes, boxSize, port;
 
 	if ( argc != 5 )
 	{
 		cerr << "usage:  dipc <number of boxes> <size of boxes in kbytes> <port> <size of packets in kbytes>" << endl;
 		return -1;
 	}
+
+	HWND window;
+	AllocConsole();
+	window = FindWindowA("ConsoleWindowClass", NULL);
+	ShowWindow(window,0);
+
 	int socket_desc , client_sock , c , read_size;
 	int *new_sock;
 	struct sockaddr_in server , client;
@@ -36,6 +45,8 @@ int main(int argc , char *argv[])
 	boxSize = atoi(argv[2]);
 	packetSize = atoi(argv[4]);
 
+	port = atoi(argv[3]);
+	cout << port << endl;
 
 	//Create array of mailboxes
 	mailboxes = new(nothrow) char*[numBoxes];
@@ -58,7 +69,7 @@ int main(int argc , char *argv[])
 	//Prepare the sockaddr_in structure
 	server.sin_family = AF_INET;
 	server.sin_addr.s_addr = INADDR_ANY;
-	server.sin_port = htons( 50007 );
+	server.sin_port = htons( port );
 
 	//Bind
 	if( bind(socket_desc,(struct sockaddr *)&server , sizeof(server)) < 0)
@@ -77,6 +88,8 @@ int main(int argc , char *argv[])
 	c = sizeof(struct sockaddr_in);
 	while( (client_sock = accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c)) )
 	{
+		
+
 		puts("Connection accepted");
 		 
 		pthread_t sniffer_thread;
@@ -92,6 +105,8 @@ int main(int argc , char *argv[])
 		//Now join the thread , so that we dont terminate before the thread
 		//pthread_join( sniffer_thread , NULL);
 		puts("Handler assigned");
+		if(killFlag == 1)
+			break;
 	}
 
 	if(read_size == 0)
@@ -104,6 +119,11 @@ int main(int argc , char *argv[])
 		perror("recv failed");
 	}
 
+	for(int i = 0; i < numBoxes; i++)
+		delete mailboxes[i];
+	delete mailboxes;
+	delete semaphores;
+
 	return 0;
 }
 
@@ -113,7 +133,7 @@ void *connection_handler (void *socket_desc)
 	int sock = *(int*)socket_desc;
 	int read_size;
 	char client_message[2000];
-	char *read_error, *usage, *write_error, *success;
+	char *read_error, *usage, *write_error, *success, *packet_error;
 	char *tokens;
 	int boxnum = 0;
 
@@ -124,67 +144,80 @@ void *connection_handler (void *socket_desc)
 	write_error = "Either no mailbox specified or no message, please try again.  usage: w <boxnum> <message>";
 	usage = "Message format:  1) 'q'  - will kill client connection  2) 'r' <boxnum> - read all messages from mailbox[boxnum] 3) 'w' <boxnum> <message> - writes whatever is in message to mailbox[boxnum]";
 	success = "Message written succesfully";
+	packet_error = "Your message was too large for the packet to send, make it smaller";
 
 	//Receive a message from client
 	while( (read_size = recv(sock , client_message , 2000 , 0)) > 0 )
 	{	
+		if( read_size > packetSize * 1024)
+		{
+			write(sock, packet_error, strlen(packet_error));
+		}
 		//Send the message back to client
 		//write(sock , client_message , strlen(client_message));
 
 		//THIS IS WHERE WRITING/READING TO SHARED MEMORY GOES
-		tokens = strtok(client_message, " \t");
-		if( strcmp(tokens, "q") == 0)
-			cout << "Shutdown socket" << endl;
-			//shutdown(sock, 2); // shuts down transmission and recieving for this socket
+		else
+		{	
+			tokens = strtok(client_message, " \t");
+			if( strcmp(tokens, "dipcdel") == 0)
+				killFlag = 1;
+			
+			else if( strcmp(tokens, "q") == 0)
+				cout << "Shutdown socket" << endl;
+				//shutdown(sock, 2); // shuts down transmission and recieving for this socket
 
-		else if( strcmp(tokens, "r") == 0)
-		{
-			tokens = strtok(NULL, " \t");
-			if(tokens == NULL)
-				write(sock, read_error, strlen(read_error));
-			// read from mailbox[tokens]
-			else
-			{	boxnum = atoi(tokens) - 1;
-				read_message(boxnum, sock);
-			}
-		}
-		
-		else if( strcmp(tokens, "w") == 0)
-		{
-			tokens = strtok(NULL, " \t");
-
-			// checks if a mailbox number was given
-			if(tokens == NULL)
-				write(sock, write_error, strlen(write_error));
-			else
+			else if( strcmp(tokens, "r") == 0)
 			{
-				boxnum = atoi(tokens) - 1;
-				cout << "writing to box " << boxnum << ": " << endl;
-				tokens = strtok(NULL, "");
-				// checks if there was a message given
+				tokens = strtok(NULL, " \t");
 				if(tokens == NULL)
-					write(sock, write_error, strlen(write_error));
-
-				// write message to mailbox[boxnum]
+					write(sock, read_error, strlen(read_error));
+				// read from mailbox[tokens]
 				else
-				{
-					cout << "Message: " << tokens << endl;
-					write_message(boxnum, tokens);
-					write(sock, success, strlen(success));
+				{	boxnum = atoi(tokens) - 1;
+					read_message(boxnum, sock);
 				}
 			}
+		
+			else if( strcmp(tokens, "w") == 0)
+			{
+				tokens = strtok(NULL, " \t");
+
+				// checks if a mailbox number was given
+				if(tokens == NULL)
+					write(sock, write_error, strlen(write_error));
+				else
+				{
+					boxnum = atoi(tokens) - 1;
+					cout << "writing to box " << boxnum << ": " << endl;
+					tokens = strtok(NULL, "");
+					// checks if there was a message given
+					if(tokens == NULL)
+						write(sock, write_error, strlen(write_error));
+
+					// write message to mailbox[boxnum]
+					else
+					{
+						cout << "Message: " << tokens << endl;
+						write_message(boxnum, tokens, sock);
+						write(sock, success, strlen(success));
+					}
+				}
+			}
+			else
+				write(sock, usage, strlen(usage));
 		}
-		else
-			write(sock, usage, strlen(usage));
-	
 	}
 
 
 	return 0;
 }
 
-void write_message (int boxnum, char *message)
-{
+void write_message (int boxnum, char *message, int &socket)
+{	
+	char *wait_message = "Waiting to write message";
+
+	while(semaphores[boxnum] == 1){write(socket, wait_message, strlen(wait_message));}
 	// check mailbox semaphore
 	if(semaphores[boxnum] == 0)
 	{
@@ -196,13 +229,15 @@ void write_message (int boxnum, char *message)
 
 void read_message (int boxnum, int &socket)
 {
+	char *wait_message = "Waiting to read message";
+
+	while(semaphores[boxnum] == 1){write(socket, wait_message, strlen(wait_message));}
 	if(semaphores[boxnum] == 0)
 	{
 		semaphores[boxnum] = 1;
 		write(socket, mailboxes[boxnum], strlen(mailboxes[boxnum]));
 	}
 	semaphores[boxnum] = 0;
-
 }
 
 
